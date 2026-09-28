@@ -3,6 +3,8 @@
 An early product concept for giving AI agents portable cryptographic identities
 using Web Bot Auth and HTTP Message Signatures.
 
+**Live demo:** [agent-proof-app.vercel.app](https://agent-proof-app.vercel.app)
+
 ## Current launch slice
 
 - Product landing page
