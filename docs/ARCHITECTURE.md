@@ -94,9 +94,16 @@ database, no authentication, and no environment variables.
 
 ## Deployment
 
-- Hosted on Vercel through the GitHub integration on
+- Hosted on Vercel (project `agent-proof-app`, team
+  `severus-technologies-projects`) through the GitHub integration on
   `alexmh-lee/agent-proof`. `vercel[bot]` creates a Production deployment for
-  every push to `main` and a Preview deployment for other branches.
+  every push to `main` and a Preview deployment for other branches, and posts
+  the preview URL on the pull request.
+- Preview deployments are behind Vercel Deployment Protection (Vercel
+  Authentication). Anonymous requests get a `302` to the Vercel login page.
+  That is fine for people reviewing previews, but external verifiers can't
+  fetch a directory from a protected preview. Phase 3 and Phase 5 testing on
+  previews will need a protection bypass or an unprotected test domain.
 - Live URL: <https://agent-proof-app.vercel.app>. The layout metadata
   references `agentproof.dev`, but this repo has no evidence that domain is
   attached to the Vercel project.
