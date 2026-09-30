@@ -1,7 +1,10 @@
 import Link from "next/link";
+import { getDb } from "@/db";
 import { requirePageUser, meetsTrustLevel } from "@/lib/access";
+import { listApiKeys } from "@/lib/api-keys";
 import { txtRecordName, txtRecordValue } from "@/lib/domain";
 import { addDomain, checkDomain, signOutAction } from "./actions";
+import { ApiKeyPanel } from "./api-key-panel";
 
 const TRUST_LABELS = {
   unverified: "Unverified",
@@ -15,6 +18,7 @@ export default async function AccountPage({
   const user = await requirePageUser("unverified");
   const { domainError } = await searchParams;
   const canVerifyDomain = meetsTrustLevel(user.trustLevel, "email_verified");
+  const keys = canVerifyDomain ? await listApiKeys(await getDb(), user.id) : [];
 
   return (
     <main className="mx-auto max-w-2xl px-5 py-20">
@@ -37,7 +41,16 @@ export default async function AccountPage({
       )}
 
       {canVerifyDomain && (
-        <section className="mt-10 rounded-2xl border border-ink bg-paper-bright p-6">
+        <>
+          <ApiKeyPanel
+            keys={keys.map((key) => ({
+              ...key,
+              createdAt: key.createdAt.toISOString(),
+              lastUsedAt: key.lastUsedAt?.toISOString() ?? null,
+              revokedAt: key.revokedAt?.toISOString() ?? null,
+            }))}
+          />
+          <section className="mt-10 rounded-2xl border border-ink bg-paper-bright p-6">
           <h2 className="text-xl font-semibold">Domain verification</h2>
           <p className="mt-2 text-muted">
             Optional. Proving you control a domain raises your agent limits.
@@ -87,7 +100,8 @@ export default async function AccountPage({
               {user.domain ? "Use a different domain" : "Add domain"}
             </button>
           </form>
-        </section>
+          </section>
+        </>
       )}
 
       <form action={signOutAction} className="mt-10">

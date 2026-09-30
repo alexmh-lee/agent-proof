@@ -1,10 +1,11 @@
 import { mkdirSync } from "node:fs";
 import path from "node:path";
-import { neon } from "@neondatabase/serverless";
+import { neonConfig, Pool } from "@neondatabase/serverless";
 import { PGlite } from "@electric-sql/pglite";
-import { drizzle as drizzleNeon } from "drizzle-orm/neon-http";
+import { drizzle as drizzleNeon } from "drizzle-orm/neon-serverless";
 import { drizzle, type PgliteDatabase } from "drizzle-orm/pglite";
 import { migrate } from "drizzle-orm/pglite/migrator";
+import WebSocket from "ws";
 import * as schema from "./schema";
 
 export type Db = PgliteDatabase<typeof schema>;
@@ -38,10 +39,14 @@ export function getDb(): Promise<Db> {
       // Both adapters implement Drizzle's PostgreSQL query API used by this
       // application. Keeping one exported type lets auth/domain services stay
       // independent of the physical database driver.
+      neonConfig.webSocketConstructor = WebSocket;
       globalForDb.agentproofDb = Promise.resolve(
-        drizzleNeon(neon(process.env.DATABASE_URL), {
+        drizzleNeon(
+          new Pool({ connectionString: process.env.DATABASE_URL }),
+          {
           schema,
-        }) as unknown as Db,
+          },
+        ) as unknown as Db,
       );
     } else {
       const dataDir = path.join(process.cwd(), ".data", "pglite");

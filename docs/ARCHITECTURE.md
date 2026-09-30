@@ -253,6 +253,35 @@ In `src/app/page.tsx`:
 
 Phase 0 changed none of this. Later phases update the copy as features ship.
 
+## Agent registration
+
+Verified accounts can create `ap_` API keys on `/account`. Only each key's
+SHA-256 hash and last four characters are stored; the raw key is returned once.
+The registration endpoints authenticate with `Authorization: Bearer <key>`:
+
+- `POST /api/v1/agents/challenge` creates a single-use, five-minute nonce.
+- `POST /api/v1/agents` verifies an Ed25519 proof and registers the agent.
+- `GET /api/v1/agents` lists that account's agents and public keys.
+
+Registration signs the UTF-8 bytes of one compact JSON object. Property order is
+part of version 1 and is lexical:
+
+```json
+{"account_id":"<account id>","directory_authority":"<account id>.id.agentproof.dev","issued_at":<unix seconds>,"nonce":"<challenge nonce>","purpose":"<declared purpose>","thumbprint":"<RFC 7638 thumbprint>","type":"agentproof-registration-v1"}
+```
+
+The server computes the thumbprint from the submitted public JWK and derives
+the directory authority from the authenticated account. It accepts and stores
+only `{ "kty": "OKP", "crv": "Ed25519", "x": "..." }`. Requests containing a
+private JWK member or PEM private key are rejected before signature handling
+and their bodies are never logged.
+
+Email-verified accounts default to five active agents, domain-verified accounts
+to 50, and all accounts to ten registrations per UTC day. Registrations above
+either threshold are retained as `pending_review` and will not be published.
+The values and directory base domain are configurable with the environment
+variables documented in `.env.example`.
+
 ## Tests
 
 | File | What it covers |
@@ -260,8 +289,9 @@ Phase 0 changed none of this. Later phases update the copy as features ship.
 | `tests/standards/vectors.test.ts` | RFC 7638/8037 thumbprints, RFC 9421 B.2.6, and draft-ietf-webbotauth-httpsig-protocol-00 E.2.1–E.2.3 test vectors, verified with Node's built-in crypto. |
 | `tests/key-custody/private-key-material.test.ts` | The private-key-material detector, run against every API response that returns keys (currently only the directory stub), and a check that no column in any table in `src/db/schema.ts` could hold private keys. |
 | `tests/accounts/auth-flow.test.ts` | Runs the real Auth.js handler against in-memory PGlite: sign up, verify, log out, log in again, reused link, expired link, hashed token storage, and a minimal session response. |
-| `tests/accounts/access.test.ts` | The agents page and API reject signed-out and `unverified` users and admit verified ones. |
+| `tests/accounts/access.test.ts` | The agents page rejects signed-out and `unverified` users and admits verified ones. |
 | `tests/accounts/domain.test.ts` | Domain verification with mocked DNS: correct TXT passes, a missing or wrong TXT fails. |
+| `tests/agents/registration.test.ts` | Hashed and revocable API keys, local key generation, proof-of-possession registration, public-only persistence, challenge expiry/replay, global thumbprint uniqueness, and pending-review limits. |
 | `tests/app/directory-stub.test.ts` | Pins the stub's current headers and body, so Phase 0 can show nothing changed. Delete it along with the stub in Phase 3. |
 
 ## Directory layout

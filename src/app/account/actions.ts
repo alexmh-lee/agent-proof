@@ -2,9 +2,11 @@
 
 import { AuthError } from "next-auth";
 import { redirect } from "next/navigation";
+import { revalidatePath } from "next/cache";
 import { signIn, signOut } from "@/auth";
 import { getDb } from "@/db";
 import { requirePageUser } from "@/lib/access";
+import { createApiKey, revokeApiKey } from "@/lib/api-keys";
 import {
   checkDomainVerification,
   startDomainVerification,
@@ -47,4 +49,40 @@ export async function checkDomain() {
     redirect(`/account?domainError=${encodeURIComponent(result.error)}`);
   }
   redirect("/account");
+}
+
+export type CreateApiKeyState = {
+  rawKey?: string;
+  error?: string;
+};
+
+export async function createApiKeyAction(
+  _previous: CreateApiKeyState,
+  formData: FormData,
+): Promise<CreateApiKeyState> {
+  const user = await requirePageUser("email_verified");
+  try {
+    const result = await createApiKey(
+      await getDb(),
+      user.id,
+      String(formData.get("label") ?? ""),
+    );
+    revalidatePath("/account");
+    return { rawKey: result.rawKey };
+  } catch (error) {
+    return {
+      error:
+        error instanceof Error ? error.message : "The API key was not created.",
+    };
+  }
+}
+
+export async function revokeApiKeyAction(formData: FormData) {
+  const user = await requirePageUser("email_verified");
+  await revokeApiKey(
+    await getDb(),
+    user.id,
+    String(formData.get("keyId") ?? ""),
+  );
+  revalidatePath("/account");
 }
