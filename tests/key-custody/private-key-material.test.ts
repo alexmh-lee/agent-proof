@@ -4,13 +4,33 @@ import {
   isTable,
   type Table,
 } from "drizzle-orm";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { GET as getDirectory } from "@/app/.well-known/http-message-signatures-directory/route";
 import * as schema from "@/db/schema";
 import {
   findPrivateKeyMaterial,
   PRIVATE_JWK_MEMBERS,
 } from "@/lib/key-material";
+import {
+  accountWithApiKey,
+  apiRequest,
+  signedRegistrationBody,
+  type RouteHandler,
+} from "../helpers/agent-api";
+
+vi.mock("@/db", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/db")>();
+  const db = await actual.createDb();
+  return { ...actual, getDb: async () => db };
+});
+
+const { getDb } = await import("@/db");
+const { GET: listAgents, POST: registerAgent } = (await import(
+  "@/app/api/v1/agents/route"
+)) as Record<"GET" | "POST", RouteHandler>;
+const { POST: createChallenge } = await import(
+  "@/app/api/v1/agents/challenge/route"
+);
 
 describe("findPrivateKeyMaterial", () => {
   it("flags a private JWK member anywhere in a payload", () => {
@@ -43,6 +63,41 @@ describe("API responses contain no private key material", () => {
     const body = await response.json();
 
     expect(findPrivateKeyMaterial(body)).toEqual([]);
+  });
+
+  it("POST /api/v1/agents/challenge, POST /api/v1/agents, GET /api/v1/agents", async () => {
+    const { authorization } = await accountWithApiKey(
+      await getDb(),
+      "email_verified",
+    );
+
+    const challenge = await createChallenge(
+      apiRequest("/api/v1/agents/challenge", { authorization }),
+    );
+    expect(challenge.status).toBe(201);
+    const challengeBody = await challenge.json();
+    expect(findPrivateKeyMaterial(challengeBody)).toEqual([]);
+
+    const registered = await registerAgent(
+      apiRequest("/api/v1/agents", {
+        authorization,
+        body: signedRegistrationBody(
+          challengeBody,
+          "custody-agent",
+          "Checks API responses for private key members.",
+        ),
+      }),
+    );
+    expect(registered.status).toBe(201);
+    expect(findPrivateKeyMaterial(await registered.json())).toEqual([]);
+
+    const listed = await listAgents(
+      apiRequest("/api/v1/agents", { method: "GET", authorization }),
+    );
+    expect(listed.status).toBe(200);
+    const listedBody = await listed.json();
+    expect(listedBody.agents).toHaveLength(1);
+    expect(findPrivateKeyMaterial(listedBody)).toEqual([]);
   });
 });
 
