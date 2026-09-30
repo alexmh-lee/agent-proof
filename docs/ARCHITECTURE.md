@@ -1,8 +1,8 @@
 # AgentProof Architecture
 
-Status: Phase 0 audit (2026-09-29). This document describes the codebase as it
-is today, marks what is placeholder or demo code, and states the key custody
-rule every later phase must follow. The protocol details live in
+Status: updated for Phase 1 (2026-09-29). This document describes the
+codebase as it is today, marks what is placeholder or demo code, and states
+the key custody rule every later phase must follow. The protocol details live in
 [`STANDARDS_NOTES.md`](./STANDARDS_NOTES.md).
 
 ## Key custody rule
@@ -50,7 +50,9 @@ telemetry.
 | Language | TypeScript 5, `strict: true`, path alias `@/*` → `src/*` |
 | Lint | ESLint 9 flat config: `eslint-config-next` core-web-vitals + typescript |
 | Tests | Vitest 4 (Node environment), added in Phase 0 |
-| Runtime deps | `next`, `react`, `react-dom`, `lucide-react` only. No database, auth, or external services. |
+| Auth | Auth.js (`next-auth@5.0.0-beta.32`, `@auth/core@0.41.3`), email magic links, database sessions (Phase 1) |
+| Database | Drizzle ORM 0.45.3 + drizzle-kit migrations in `drizzle/`. Neon Postgres on Vercel; embedded PGlite Postgres for local development and tests. |
+| External services | Neon stores account data. Resend delivers magic links; the temporary `onboarding@resend.dev` test sender can deliver only to the Resend account owner. |
 
 Next.js 16 differs from older versions in places. Before writing framework
 code, read the matching guide in `node_modules/next/dist/docs/` (see
@@ -73,6 +75,8 @@ code, read the matching guide in `node_modules/next/dist/docs/` (see
 | `npm run test` | `vitest run` |
 | `npm run test:watch` | `vitest` (watch mode) |
 | `npm run check` | lint, then typecheck, then tests. Must pass before a phase is reported done. |
+| `npm run db:generate` | Generate a SQL migration in `drizzle/` after editing `src/db/schema.ts`. |
+| `npm run db:migrate` | Apply committed migrations to the database selected by `DATABASE_URL`. PGlite applies them automatically when it opens. |
 
 ## Routes
 
@@ -80,6 +84,12 @@ code, read the matching guide in `node_modules/next/dist/docs/` (see
 | --- | --- | --- | --- |
 | `/` | `src/app/page.tsx` | Static (prerendered) | Marketing landing page. Server Component that embeds the client-side `IdentityDemo` lab at `#lab`. |
 | `/.well-known/http-message-signatures-directory` | `src/app/.well-known/http-message-signatures-directory/route.ts` | Dynamic `GET` handler | **Hardcoded demo directory** (see below). |
+| `/login` | `src/app/login/page.tsx` | Dynamic | Magic-link sign-in / sign-up form, or "not configured". |
+| `/login/check-email` | `src/app/login/check-email/page.tsx` | Static | Shown after a link is sent. |
+| `/account` | `src/app/account/page.tsx` | Dynamic | Signed-in users: trust level, domain verification, sign out. |
+| `/agents` | `src/app/agents/page.tsx` | Dynamic | Placeholder. Requires `email_verified`. |
+| `/api/auth/*` | `src/app/api/auth/[...nextauth]/route.ts` | Dynamic | Auth.js endpoints. `503` when sign-in is not configured. |
+| `/api/v1/agents` | `src/app/api/v1/agents/route.ts` | Dynamic | Placeholder (`501`). `401` signed out, `403` below `email_verified`. |
 | `/_not-found` | Next.js built-in | Static | Default 404. |
 | `/favicon.ico` | `src/app/favicon.ico` | Static asset | |
 
@@ -89,8 +99,51 @@ code, read the matching guide in `node_modules/next/dist/docs/` (see
 the unused default Next.js SVGs (`file.svg`, `globe.svg`, `next.svg`,
 `vercel.svg`, `window.svg`).
 
-There are no API routes, no middleware or proxy file, no server actions, no
-database, no authentication, and no environment variables.
+There is no proxy (middleware) file. Access checks run in each page, route
+handler, and server action through `src/lib/access.ts`.
+
+## Accounts (Phase 1)
+
+- **Tables** (`src/db/schema.ts`): `user`, `account`, `session`,
+  `verificationToken`, in the shape `@auth/drizzle-adapter` expects. `user`
+  also has `trust_level` and a single domain claim (`domain`, `domain_token`,
+  `domain_verified_at`).
+- **Sign-up and login** are the same flow: enter an email, open the magic
+  link. Links expire after 15 minutes and work once. Auth.js deletes the token
+  row on first use, even when it has expired, and stores only
+  SHA-256(token + `AUTH_SECRET`).
+- **Trust levels:** `unverified` → `email_verified` (set when a magic-link
+  sign-in completes) → `domain_verified` (set when the TXT check passes).
+  Changing the domain drops a `domain_verified` account back to
+  `email_verified`. Magic-link sign-up creates the user only when the link is
+  opened, so `unverified` users only appear if another sign-in method is added
+  later. The gate still enforces it.
+- **Access helper:** `requirePageUser(level)` redirects to `/login` or
+  `/account`. `requireApiUser(level)` returns `401` or `403`. Agent pages and
+  APIs require `email_verified`.
+- **Domain verification:** the account adds TXT
+  `_agentproof.<domain>` = `agentproof-verify=<token>`, and the server checks it
+  with `dns.resolveTxt` (`src/lib/domain.ts`).
+- **Where sign-in works:** sign-in is enabled only when `AUTH_SECRET`, a
+  database, and an email sender exist. Local `next dev` defaults to PGlite in
+  `.data/pglite` and prints links to the developer's terminal. Vercel uses the
+  connected Neon database and Resend; magic links are never logged in a
+  deployed environment.
+- **Email:** `src/lib/email.ts` implements `EmailSender` with Resend when
+  `RESEND_API_KEY` and `EMAIL_FROM` exist. The initial test sender is
+  `AgentProof <onboarding@resend.dev>` and is deliberately temporary because
+  Resend restricts it to the account owner's address.
+- **Session response:** `/api/auth/session` returns only `expires`,
+  `user.id`, and `user.email`. The default Auth.js database session would
+  include the raw session token.
+
+## Environment variables
+
+See `.env.example`. Locally, only `AUTH_SECRET` is needed; `DATABASE_URL` and
+Resend are optional. Vercel Preview and Production require `AUTH_SECRET`,
+`DATABASE_URL`, `RESEND_API_KEY`, and `EMAIL_FROM`. Neon supplies
+`DATABASE_URL` through its Marketplace integration. Secret values are never
+committed.
 
 ## Deployment
 
@@ -107,9 +160,10 @@ database, no authentication, and no environment variables.
 - Live URL: <https://agent-proof-app.vercel.app>. The layout metadata
   references `agentproof.dev`, but this repo has no evidence that domain is
   attached to the Vercel project.
-- No `vercel.json`, no custom `next.config.ts` options, no cron jobs, no
-  environment variables. `.vercel/` is gitignored, and the Vercel CLI is not
-  installed on the audit machine.
+- The Vercel project is connected to a Neon Marketplace database, and the
+  Phase 1 migration has been applied. There is no `vercel.json` or cron job.
+  `next.config.ts` marks PGlite as a server external package for local use.
+  `.vercel/` and pulled environment files are gitignored.
 - Vercel serves the directory with `cache-control: public, max-age=300`
   (Vercel strips `s-maxage` from the client-facing header).
 
@@ -199,12 +253,15 @@ In `src/app/page.tsx`:
 
 Phase 0 changed none of this. Later phases update the copy as features ship.
 
-## Tests (Phase 0)
+## Tests
 
 | File | What it covers |
 | --- | --- |
 | `tests/standards/vectors.test.ts` | RFC 7638/8037 thumbprints, RFC 9421 B.2.6, and draft-ietf-webbotauth-httpsig-protocol-00 E.2.1–E.2.3 test vectors, verified with Node's built-in crypto. |
-| `tests/key-custody/private-key-material.test.ts` | The private-key-material detector, run against every API response that returns keys (currently only the directory stub). |
+| `tests/key-custody/private-key-material.test.ts` | The private-key-material detector, run against every API response that returns keys (currently only the directory stub), and a check that no column in any table in `src/db/schema.ts` could hold private keys. |
+| `tests/accounts/auth-flow.test.ts` | Runs the real Auth.js handler against in-memory PGlite: sign up, verify, log out, log in again, reused link, expired link, hashed token storage, and a minimal session response. |
+| `tests/accounts/access.test.ts` | The agents page and API reject signed-out and `unverified` users and admit verified ones. |
+| `tests/accounts/domain.test.ts` | Domain verification with mocked DNS: correct TXT passes, a missing or wrong TXT fails. |
 | `tests/app/directory-stub.test.ts` | Pins the stub's current headers and body, so Phase 0 can show nothing changed. Delete it along with the stub in Phase 3. |
 
 ## Directory layout
@@ -212,6 +269,10 @@ Phase 0 changed none of this. Later phases update the copy as features ship.
 ```
 src/app/                    Next.js App Router (pages, layouts, route handlers)
 src/components/             Client components (identity lab)
+src/auth.ts                 Auth.js instance, authConfigured(), getCurrentUser()
+src/db/                     Drizzle schema and PGlite connection
+src/lib/                    Auth config, access checks, domain verification, email
+drizzle/                    SQL migrations (generated by drizzle-kit)
 tests/                      Vitest suites (standards vectors, key custody, app)
 tests/helpers/              Shared test helpers
 docs/                       ARCHITECTURE.md, STANDARDS_NOTES.md

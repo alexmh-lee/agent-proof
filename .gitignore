@@ -35,12 +35,18 @@ yarn-error.log*
 .env
 .env.local
 .env*.local
+!.env.example
+
+# local PGlite database
+/.data/
 
 # agentproof private keys
 agentproof-key*.json
 
 # vercel
 .vercel
+.agents/
+skills-lock.json
 
 # typescript
 *.tsbuildinfo
