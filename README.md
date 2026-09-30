@@ -32,9 +32,13 @@ Open [http://localhost:3000](http://localhost:3000).
 ## Verify
 
 ```bash
-npm run lint
+npm run check
 npm run build
 ```
+
+See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the current system audit
+and [`docs/STANDARDS_NOTES.md`](docs/STANDARDS_NOTES.md) for the protocol
+requirements and implementation decisions.
 
 ## Next production milestones
 
