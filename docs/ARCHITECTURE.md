@@ -1,6 +1,6 @@
 # AgentProof Architecture
 
-Status: updated for Phase 1 (2026-09-29). This document describes the
+Status: updated for Phase 2 (2026-09-30). This document describes the
 codebase as it is today, marks what is placeholder or demo code, and states
 the key custody rule every later phase must follow. The protocol details live in
 [`STANDARDS_NOTES.md`](./STANDARDS_NOTES.md).
@@ -30,7 +30,8 @@ This rule applies to every phase. Any code that breaks it is a bug.
 "Private key material" means, at minimum: the JWK members `d`, `p`, `q`, `dp`,
 `dq`, `qi`, `oth`, and `k` (RFC 7518 §6, RFC 8037 §2), and any string containing
 a `-----BEGIN ... PRIVATE KEY-----` PEM header. The check lives in
-`tests/helpers/private-key-material.ts`. `tests/key-custody/` runs it against
+`src/lib/key-material.ts`, and registration uses it to reject requests.
+`tests/key-custody/` runs it against
 every API response that returns key data, and each phase adds its new
 endpoints and tables there.
 
@@ -86,10 +87,11 @@ code, read the matching guide in `node_modules/next/dist/docs/` (see
 | `/.well-known/http-message-signatures-directory` | `src/app/.well-known/http-message-signatures-directory/route.ts` | Dynamic `GET` handler | **Hardcoded demo directory** (see below). |
 | `/login` | `src/app/login/page.tsx` | Dynamic | Magic-link sign-in / sign-up form, or "not configured". |
 | `/login/check-email` | `src/app/login/check-email/page.tsx` | Static | Shown after a link is sent. |
-| `/account` | `src/app/account/page.tsx` | Dynamic | Signed-in users: trust level, domain verification, sign out. |
-| `/agents` | `src/app/agents/page.tsx` | Dynamic | Placeholder. Requires `email_verified`. |
+| `/account` | `src/app/account/page.tsx` | Dynamic | Signed-in users: trust level, API keys (`email_verified` and above), domain verification, sign out. |
+| `/agents` | `src/app/agents/page.tsx` | Dynamic | Lists the account's agents. Requires `email_verified`. |
 | `/api/auth/*` | `src/app/api/auth/[...nextauth]/route.ts` | Dynamic | Auth.js endpoints. `503` when sign-in is not configured. |
-| `/api/v1/agents` | `src/app/api/v1/agents/route.ts` | Dynamic | Placeholder (`501`). `401` signed out, `403` below `email_verified`. |
+| `/api/v1/agents/challenge` | `src/app/api/v1/agents/challenge/route.ts` | Dynamic `POST` | Issues a single-use, five-minute registration challenge. Bearer API key; `401` missing or invalid, `403` below `email_verified`. |
+| `/api/v1/agents` | `src/app/api/v1/agents/route.ts` | Dynamic `GET`, `POST` | `GET` lists the account's agents and public keys. `POST` registers an agent with proof of possession. Same bearer-key rules. |
 | `/_not-found` | Next.js built-in | Static | Default 404. |
 | `/favicon.ico` | `src/app/favicon.ico` | Static asset | |
 
@@ -99,8 +101,9 @@ code, read the matching guide in `node_modules/next/dist/docs/` (see
 the unused default Next.js SVGs (`file.svg`, `globe.svg`, `next.svg`,
 `vercel.svg`, `window.svg`).
 
-There is no proxy (middleware) file. Access checks run in each page, route
-handler, and server action through `src/lib/access.ts`.
+There is no proxy (middleware) file. Pages and server actions check access
+through `src/lib/access.ts`. The `/api/v1/agents` routes authenticate bearer
+API keys through `src/lib/api-keys.ts`.
 
 ## Accounts (Phase 1)
 
@@ -119,8 +122,9 @@ handler, and server action through `src/lib/access.ts`.
   opened, so `unverified` users only appear if another sign-in method is added
   later. The gate still enforces it.
 - **Access helper:** `requirePageUser(level)` redirects to `/login` or
-  `/account`. `requireApiUser(level)` returns `401` or `403`. Agent pages and
-  APIs require `email_verified`.
+  `/account`. `requireApiUser(level)` returns `401` or `403`. Agent pages
+  require `email_verified`; the agent APIs enforce the same level on the
+  API key's account (see Agent registration).
 - **Domain verification:** the account adds TXT
   `_agentproof.<domain>` = `agentproof-verify=<token>`, and the server checks it
   with `dns.resolveTxt` (`src/lib/domain.ts`).
@@ -279,6 +283,9 @@ and their bodies are never logged.
 Email-verified accounts default to five active agents, domain-verified accounts
 to 50, and all accounts to ten registrations per UTC day. Registrations above
 either threshold are retained as `pending_review` and will not be published.
+Their key rows keep the stored status `active`, so code must read key status
+through `effectiveKeyStatus()` in `src/lib/agent-registration.ts`, which reports
+the agent's status for keys of any agent that is not `active`.
 The values and directory base domain are configurable with the environment
 variables documented in `.env.example`.
 
@@ -287,11 +294,12 @@ variables documented in `.env.example`.
 | File | What it covers |
 | --- | --- |
 | `tests/standards/vectors.test.ts` | RFC 7638/8037 thumbprints, RFC 9421 B.2.6, and draft-ietf-webbotauth-httpsig-protocol-00 E.2.1–E.2.3 test vectors, verified with Node's built-in crypto. |
-| `tests/key-custody/private-key-material.test.ts` | The private-key-material detector, run against every API response that returns keys (currently only the directory stub), and a check that no column in any table in `src/db/schema.ts` could hold private keys. |
+| `tests/key-custody/private-key-material.test.ts` | The private-key-material detector, run against every API response that returns keys (the directory stub and the three `/api/v1/agents` routes), and a check that no column in any table in `src/db/schema.ts` could hold private keys. |
 | `tests/accounts/auth-flow.test.ts` | Runs the real Auth.js handler against in-memory PGlite: sign up, verify, log out, log in again, reused link, expired link, hashed token storage, and a minimal session response. |
-| `tests/accounts/access.test.ts` | The agents page rejects signed-out and `unverified` users and admits verified ones. |
+| `tests/accounts/access.test.ts` | The agents page and the agent APIs reject signed-out (no API key) and `unverified` users and admit verified ones. |
 | `tests/accounts/domain.test.ts` | Domain verification with mocked DNS: correct TXT passes, a missing or wrong TXT fails. |
-| `tests/agents/registration.test.ts` | Hashed and revocable API keys, local key generation, proof-of-possession registration, public-only persistence, challenge expiry/replay, global thumbprint uniqueness, and pending-review limits. |
+| `tests/agents/registration.test.ts` | Hashed and revocable API keys, local key generation, proof-of-possession registration, public-only persistence, challenge expiry/replay, global thumbprint uniqueness, pending-review limits, and that keys of non-active agents are never reported as active. |
+| `tests/agents/routes.test.ts` | Calls the real agent route handlers: `401` for a missing or invalid key, `403` for unverified accounts, successful registration and listing, `409` for a reused challenge, and `400` for a `d` field, a PEM private key, or a non-Ed25519 key. |
 | `tests/app/directory-stub.test.ts` | Pins the stub's current headers and body, so Phase 0 can show nothing changed. Delete it along with the stub in Phase 3. |
 
 ## Directory layout

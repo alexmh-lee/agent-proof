@@ -10,6 +10,8 @@ import {
 } from "@/lib/api-keys";
 import {
   createRegistrationChallenge,
+  effectiveKeyStatus,
+  listAgents,
   publicJwkThumbprint,
   registerAgent,
   registrationMessage,
@@ -206,12 +208,33 @@ describe("agent registration proof", () => {
     );
     const result = await registerAgent(db, owner, second.body, { limits });
     expect(result.status).toBe("pending_review");
+    expect(result.key.status).toBe("pending_review");
 
     const [stored] = await db
       .select({ status: agents.status })
       .from(agents)
       .where(eq(agents.id, result.id));
     expect(stored.status).toBe("pending_review");
+
+    const listed = await listAgents(db, owner.id);
+    expect(
+      listed.find((agent) => agent.id === result.id)?.keyStatus,
+    ).toBe("pending_review");
+    expect(
+      listed.find((agent) => agent.name === "first-agent")?.keyStatus,
+    ).toBe("active");
+  });
+
+  it("never reports a key of a non-active agent as active", () => {
+    expect(effectiveKeyStatus("pending_review", "active")).toBe(
+      "pending_review",
+    );
+    expect(effectiveKeyStatus("pending_review", "retiring")).toBe(
+      "pending_review",
+    );
+    expect(effectiveKeyStatus("revoked", "active")).toBe("revoked");
+    expect(effectiveKeyStatus("active", "active")).toBe("active");
+    expect(effectiveKeyStatus("active", "retiring")).toBe("retiring");
   });
 
   it("enforces global thumbprint uniqueness", async () => {
