@@ -51,8 +51,8 @@ telemetry.
 | Lint | ESLint 9 flat config: `eslint-config-next` core-web-vitals + typescript |
 | Tests | Vitest 4 (Node environment), added in Phase 0 |
 | Auth | Auth.js (`next-auth@5.0.0-beta.32`, `@auth/core@0.41.3`), email magic links, database sessions (Phase 1) |
-| Database | Drizzle ORM 0.45.3 + drizzle-kit migrations in `drizzle/`. Local only: embedded PGlite Postgres (`@electric-sql/pglite`). No hosted database yet (Phase 1) |
-| External services | None. No hosted database and no email provider have been chosen. |
+| Database | Drizzle ORM 0.45.3 + drizzle-kit migrations in `drizzle/`. Neon Postgres on Vercel; embedded PGlite Postgres for local development and tests. |
+| External services | Neon stores account data. Resend delivers magic links; the temporary `onboarding@resend.dev` test sender can deliver only to the Resend account owner. |
 
 Next.js 16 differs from older versions in places. Before writing framework
 code, read the matching guide in `node_modules/next/dist/docs/` (see
@@ -75,7 +75,8 @@ code, read the matching guide in `node_modules/next/dist/docs/` (see
 | `npm run test` | `vitest run` |
 | `npm run test:watch` | `vitest` (watch mode) |
 | `npm run check` | lint, then typecheck, then tests. Must pass before a phase is reported done. |
-| `npm run db:generate` | Generate a SQL migration in `drizzle/` after editing `src/db/schema.ts`. Migrations are applied automatically when the database opens. |
+| `npm run db:generate` | Generate a SQL migration in `drizzle/` after editing `src/db/schema.ts`. |
+| `npm run db:migrate` | Apply committed migrations to the database selected by `DATABASE_URL`. PGlite applies them automatically when it opens. |
 
 ## Routes
 
@@ -123,25 +124,26 @@ handler, and server action through `src/lib/access.ts`.
 - **Domain verification:** the account adds TXT
   `_agentproof.<domain>` = `agentproof-verify=<token>`, and the server checks it
   with `dns.resolveTxt` (`src/lib/domain.ts`).
-- **Where sign-in works:** sign-in is enabled only when `AUTH_SECRET` is set
-  *and* a database and an email sender exist. Today both exist only in local
-  `next dev` (PGlite in `.data/pglite`, links printed to the terminal). On
-  Vercel preview and production, `/login` says "not configured", protected
-  pages redirect there, and `/api/auth/*` returns `503`. Magic links are never
-  logged outside local development.
-- **Email:** `src/lib/email.ts` defines an `EmailSender` interface. Enabling
-  real email means adding a provider implementation there and returning it
-  from `getEmailSender()` on deployed environments.
+- **Where sign-in works:** sign-in is enabled only when `AUTH_SECRET`, a
+  database, and an email sender exist. Local `next dev` defaults to PGlite in
+  `.data/pglite` and prints links to the developer's terminal. Vercel uses the
+  connected Neon database and Resend; magic links are never logged in a
+  deployed environment.
+- **Email:** `src/lib/email.ts` implements `EmailSender` with Resend when
+  `RESEND_API_KEY` and `EMAIL_FROM` exist. The initial test sender is
+  `AgentProof <onboarding@resend.dev>` and is deliberately temporary because
+  Resend restricts it to the account owner's address.
 - **Session response:** `/api/auth/session` returns only `expires`,
   `user.id`, and `user.email`. The default Auth.js database session would
   include the raw session token.
 
 ## Environment variables
 
-See `.env.example`. Locally, only `AUTH_SECRET` is needed. Vercel needs none
-yet. When a hosted database and an email provider are chosen, add
-`AUTH_SECRET`, the database URL, and the provider API key in the Vercel
-project settings.
+See `.env.example`. Locally, only `AUTH_SECRET` is needed; `DATABASE_URL` and
+Resend are optional. Vercel Preview and Production require `AUTH_SECRET`,
+`DATABASE_URL`, `RESEND_API_KEY`, and `EMAIL_FROM`. Neon supplies
+`DATABASE_URL` through its Marketplace integration. Secret values are never
+committed.
 
 ## Deployment
 
@@ -158,9 +160,10 @@ project settings.
 - Live URL: <https://agent-proof-app.vercel.app>. The layout metadata
   references `agentproof.dev`, but this repo has no evidence that domain is
   attached to the Vercel project.
-- No `vercel.json`, no cron jobs, no environment variables. `next.config.ts`
-  only marks PGlite as a server external package. `.vercel/` is gitignored, and the Vercel CLI is not
-  installed on the audit machine.
+- The Vercel project is connected to a Neon Marketplace database, and the
+  Phase 1 migration has been applied. There is no `vercel.json` or cron job.
+  `next.config.ts` marks PGlite as a server external package for local use.
+  `.vercel/` and pulled environment files are gitignored.
 - Vercel serves the directory with `cache-control: public, max-age=300`
   (Vercel strips `s-maxage` from the client-facing header).
 

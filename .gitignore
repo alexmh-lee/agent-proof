@@ -45,6 +45,8 @@ agentproof-key*.json
 
 # vercel
 .vercel
+.agents/
+skills-lock.json
 
 # typescript
 *.tsbuildinfo
