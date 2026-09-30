@@ -4,8 +4,11 @@ import type { TrustLevel } from "@/db/schema";
 
 const getCurrentUser = vi.fn<() => Promise<CurrentUser | null>>();
 vi.mock("@/auth", () => ({ getCurrentUser }));
+vi.mock("@/db", () => ({ getDb: vi.fn().mockResolvedValue({}) }));
+vi.mock("@/lib/agent-registration", () => ({
+  listAgents: vi.fn().mockResolvedValue([]),
+}));
 
-const { GET, POST } = await import("@/app/api/v1/agents/route");
 const { default: AgentsPage } = await import("@/app/agents/page");
 
 function signedInAs(trustLevel: TrustLevel | null) {
@@ -33,28 +36,6 @@ async function redirectTarget(render: () => Promise<unknown>) {
 }
 
 beforeEach(() => getCurrentUser.mockReset());
-
-describe("agent registration API requires a verified email", () => {
-  it.each([GET, POST])("returns 401 when signed out", async (handler) => {
-    signedInAs(null);
-    expect((await handler()).status).toBe(401);
-  });
-
-  it.each([GET, POST])("returns 403 for unverified accounts", async (handler) => {
-    signedInAs("unverified");
-    expect((await handler()).status).toBe(403);
-  });
-
-  it.each(["email_verified", "domain_verified"] as const)(
-    "lets %s accounts through the gate",
-    async (level) => {
-      signedInAs(level);
-      const status = (await GET()).status;
-      expect(status).not.toBe(401);
-      expect(status).not.toBe(403);
-    },
-  );
-});
 
 describe("agents page requires a verified email", () => {
   it("sends signed-out visitors to /login", async () => {

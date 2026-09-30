@@ -10,7 +10,7 @@ import * as schema from "@/db/schema";
 import {
   findPrivateKeyMaterial,
   PRIVATE_JWK_MEMBERS,
-} from "../helpers/private-key-material";
+} from "@/lib/key-material";
 
 describe("findPrivateKeyMaterial", () => {
   it("flags a private JWK member anywhere in a payload", () => {
@@ -55,6 +55,10 @@ describe("database tables have no column that could hold private keys", () => {
   it("finds the tables", () => {
     expect(tables.map(getTableName).sort()).toEqual([
       "account",
+      "agent",
+      "agent_key",
+      "api_key",
+      "registration_challenge",
       "session",
       "user",
       "verificationToken",
@@ -69,7 +73,8 @@ describe("database tables have no column that could hold private keys", () => {
         .filter(
           (name) =>
             PRIVATE_JWK_MEMBERS.includes(name.toLowerCase()) ||
-            /private|secret|pem|jwk/i.test(name),
+            /private|secret|pem/i.test(name) ||
+            (/jwk/i.test(name) && name !== "public_jwk"),
         );
       expect(suspicious).toEqual([]);
     },
