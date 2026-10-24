@@ -187,3 +187,31 @@ export const registrationChallenges = pgTable(
     index("registration_challenge_account_idx").on(challenge.accountId),
   ],
 );
+
+// One stored directory response signature per key. Produced client-side;
+// the server only verifies and serves it. Never holds private key material.
+export const directoryAttestations = pgTable(
+  "directory_attestation",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    agentKeyId: text("agent_key_id")
+      .notNull()
+      .references(() => agentKeys.id, { onDelete: "cascade" }),
+    label: text("label").notNull(),
+    authority: text("authority").notNull(),
+    contentDigest: text("content_digest").notNull(),
+    signatureInput: text("signature_input").notNull(),
+    signature: text("signature").notNull(),
+    created: integer("created").notNull(),
+    expires: integer("expires").notNull(),
+    uploadedAt: timestamp("uploaded_at", { mode: "date" })
+      .notNull()
+      .defaultNow(),
+  },
+  (attestation) => [
+    uniqueIndex("directory_attestation_key_unique").on(attestation.agentKeyId),
+    index("directory_attestation_key_idx").on(attestation.agentKeyId),
+  ],
+);

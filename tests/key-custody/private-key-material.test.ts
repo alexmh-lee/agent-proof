@@ -5,8 +5,8 @@ import {
   type Table,
 } from "drizzle-orm";
 import { describe, expect, it, vi } from "vitest";
-import { GET as getDirectory } from "@/app/.well-known/http-message-signatures-directory/route";
 import * as schema from "@/db/schema";
+import { directoryAuthority } from "@/lib/agent-registration";
 import {
   findPrivateKeyMaterial,
   PRIVATE_JWK_MEMBERS,
@@ -25,11 +25,20 @@ vi.mock("@/db", async (importOriginal) => {
 });
 
 const { getDb } = await import("@/db");
+const { GET: getDirectory } = await import(
+  "@/app/.well-known/http-message-signatures-directory/route"
+);
 const { GET: listAgents, POST: registerAgent } = (await import(
   "@/app/api/v1/agents/route"
 )) as Record<"GET" | "POST", RouteHandler>;
 const { POST: createChallenge } = await import(
   "@/app/api/v1/agents/challenge/route"
+);
+const { POST: uploadAttestation } = await import(
+  "@/app/api/v1/agents/[agentId]/keys/[keyId]/attestation/route"
+);
+const { GET: getKeyMetadata } = await import(
+  "@/app/api/v1/keys/[thumbprint]/route"
 );
 
 describe("findPrivateKeyMaterial", () => {
@@ -58,14 +67,51 @@ describe("findPrivateKeyMaterial", () => {
 // Every API response that returns key data belongs in this list. Later
 // phases add database tables and new endpoints here.
 describe("API responses contain no private key material", () => {
-  it("GET /.well-known/http-message-signatures-directory", async () => {
-    const response = getDirectory();
-    const body = await response.json();
+  it("GET /.well-known/http-message-signatures-directory and key metadata", async () => {
+    const db = await getDb();
+    const { id: accountId, authorization } = await accountWithApiKey(
+      db,
+      "email_verified",
+    );
+    const challenge = await createChallenge(
+      apiRequest("/api/v1/agents/challenge", { authorization }),
+    );
+    const challengeBody = await challenge.json();
+    const registered = await registerAgent(
+      apiRequest("/api/v1/agents", {
+        authorization,
+        body: signedRegistrationBody(
+          challengeBody,
+          "custody-directory",
+          "Directory custody check.",
+        ),
+      }),
+    );
+    const agent = await registered.json();
+    const host = directoryAuthority(accountId);
 
-    expect(findPrivateKeyMaterial(body)).toEqual([]);
+    const directory = await getDirectory(
+      new Request(
+        `http://${host}/.well-known/http-message-signatures-directory`,
+        { headers: { host } },
+      ),
+    );
+    expect(directory.status).toBe(200);
+    expect(findPrivateKeyMaterial(await directory.json())).toEqual([]);
+
+    const metadata = await getKeyMetadata(
+      new Request(`http://${host}/api/v1/keys/${agent.key.thumbprint}`, {
+        headers: { host },
+      }),
+      {
+        params: Promise.resolve({ thumbprint: agent.key.thumbprint }),
+      },
+    );
+    expect(metadata.status).toBe(200);
+    expect(findPrivateKeyMaterial(await metadata.json())).toEqual([]);
   });
 
-  it("POST /api/v1/agents/challenge, POST /api/v1/agents, GET /api/v1/agents", async () => {
+  it("POST /api/v1/agents/challenge, POST /api/v1/agents, GET /api/v1/agents, attestation", async () => {
     const { authorization } = await accountWithApiKey(
       await getDb(),
       "email_verified",
@@ -89,7 +135,8 @@ describe("API responses contain no private key material", () => {
       }),
     );
     expect(registered.status).toBe(201);
-    expect(findPrivateKeyMaterial(await registered.json())).toEqual([]);
+    const registeredBody = await registered.json();
+    expect(findPrivateKeyMaterial(registeredBody)).toEqual([]);
 
     const listed = await listAgents(
       apiRequest("/api/v1/agents", { method: "GET", authorization }),
@@ -98,6 +145,29 @@ describe("API responses contain no private key material", () => {
     const listedBody = await listed.json();
     expect(listedBody.agents).toHaveLength(1);
     expect(findPrivateKeyMaterial(listedBody)).toEqual([]);
+
+    const attestation = await uploadAttestation(
+      apiRequest(
+        `/api/v1/agents/${registeredBody.id}/keys/${registeredBody.key.id}/attestation`,
+        {
+          authorization,
+          body: {
+            authority: challengeBody.directory_authority,
+            signature_input: "not-a-real-signature",
+            signature: "also-not-real",
+          },
+        },
+      ),
+      {
+        params: Promise.resolve({
+          agentId: registeredBody.id,
+          keyId: registeredBody.key.id,
+        }),
+      },
+    );
+    // Invalid attestation is rejected before any key material could leak back.
+    expect(attestation.status).toBe(400);
+    expect(findPrivateKeyMaterial(await attestation.json())).toEqual([]);
   });
 });
 
@@ -113,6 +183,7 @@ describe("database tables have no column that could hold private keys", () => {
       "agent",
       "agent_key",
       "api_key",
+      "directory_attestation",
       "registration_challenge",
       "session",
       "user",
