@@ -12,6 +12,7 @@ import {
   ShieldCheck,
   Sparkles,
 } from "lucide-react";
+import { getCurrentUser } from "@/auth";
 import { IdentityDemo } from "@/components/identity-demo";
 
 const tickerItems = [
@@ -67,7 +68,9 @@ const capabilities = [
   },
 ];
 
-export default function Home() {
+export default async function Home() {
+  const user = await getCurrentUser();
+
   return (
     <main className="overflow-hidden">
       <nav className="relative z-20 border-b border-ink">
@@ -91,13 +94,27 @@ export default function Home() {
               Identity lab
             </a>
           </div>
-          <a
-            href="#lab"
-            className="btn-lift flex h-10 items-center gap-2 rounded-xl border border-ink bg-ink px-4 text-sm font-semibold text-paper"
-          >
-            Try the lab
-            <ArrowDownRight size={15} />
-          </a>
+          <div className="flex items-center gap-4 sm:gap-5">
+            {user ? (
+              <a
+                className="text-sm transition hover:opacity-55"
+                href="/account"
+              >
+                Account
+              </a>
+            ) : (
+              <a className="text-sm transition hover:opacity-55" href="/login">
+                Sign in
+              </a>
+            )}
+            <a
+              href="#lab"
+              className="btn-lift flex h-10 items-center gap-2 rounded-xl border border-ink bg-ink px-4 text-sm font-semibold text-paper"
+            >
+              Try the lab
+              <ArrowDownRight size={15} />
+            </a>
+          </div>
         </div>
       </nav>
 
