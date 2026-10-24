@@ -11,6 +11,8 @@ import {
   agents,
   registrationChallenges,
   users,
+  type AgentKeyStatus,
+  type AgentStatus,
   type PublicEd25519Jwk,
   type TrustLevel,
 } from "@/db/schema";
@@ -54,6 +56,17 @@ export function registrationLimits(): RegistrationLimits {
       10,
     ),
   };
+}
+
+// A stored key status of active or retiring only counts while its agent is
+// active. Keys of pending_review or revoked agents must never be published.
+export function effectiveKeyStatus(
+  agentStatus: AgentStatus,
+  keyStatus: AgentKeyStatus,
+) {
+  return agentStatus !== "active" && keyStatus !== "revoked"
+    ? agentStatus
+    : keyStatus;
 }
 
 export function directoryAuthority(accountId: string) {
@@ -392,7 +405,7 @@ export async function registerAgent(
           id: key.id,
           publicJwk: key.publicJwk,
           thumbprint: key.thumbprint,
-          status: key.status,
+          status: effectiveKeyStatus(agent.status, key.status),
           createdAt: key.createdAt,
         },
       };
@@ -409,8 +422,8 @@ export async function registerAgent(
   }
 }
 
-export function listAgents(db: Db, accountId: string) {
-  return db
+export async function listAgents(db: Db, accountId: string) {
+  const rows = await db
     .select({
       id: agents.id,
       name: agents.name,
@@ -427,4 +440,8 @@ export function listAgents(db: Db, accountId: string) {
     .innerJoin(agentKeys, eq(agentKeys.agentId, agents.id))
     .where(eq(agents.accountId, accountId))
     .orderBy(desc(agents.createdAt));
+  return rows.map((row) => ({
+    ...row,
+    keyStatus: effectiveKeyStatus(row.status, row.keyStatus),
+  }));
 }
