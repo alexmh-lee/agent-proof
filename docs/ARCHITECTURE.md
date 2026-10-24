@@ -1,6 +1,6 @@
 # AgentProof Architecture
 
-Status: updated for Phase 2 (2026-09-30). This document describes the
+Status: updated for Phase 3 (2026-10-24). This document describes the
 codebase as it is today, marks what is placeholder or demo code, and states
 the key custody rule every later phase must follow. The protocol details live in
 [`STANDARDS_NOTES.md`](./STANDARDS_NOTES.md).
@@ -83,8 +83,8 @@ code, read the matching guide in `node_modules/next/dist/docs/` (see
 
 | Route | File | Type | What it does |
 | --- | --- | --- | --- |
-| `/` | `src/app/page.tsx` | Static (prerendered) | Marketing landing page. Server Component that embeds the client-side `IdentityDemo` lab at `#lab`. |
-| `/.well-known/http-message-signatures-directory` | `src/app/.well-known/http-message-signatures-directory/route.ts` | Dynamic `GET` handler | **Hardcoded demo directory** (see below). |
+| `/` | `src/app/page.tsx` | Dynamic | Marketing landing page. Server Component that embeds the client-side `IdentityDemo` lab at `#lab`. Shows Sign in / Account in the header. |
+| `/.well-known/http-message-signatures-directory` | `src/app/.well-known/http-message-signatures-directory/route.ts` | Dynamic `GET` | Per-account key directory. Served only when `Host` is `<account-id>.<directory-base>` (see Hosted key directory). |
 | `/login` | `src/app/login/page.tsx` | Dynamic | Magic-link sign-in / sign-up form, or "not configured". |
 | `/login/check-email` | `src/app/login/check-email/page.tsx` | Static | Shown after a link is sent. |
 | `/account` | `src/app/account/page.tsx` | Dynamic | Signed-in users: trust level, API keys (`email_verified` and above), domain verification, sign out. |
@@ -92,6 +92,8 @@ code, read the matching guide in `node_modules/next/dist/docs/` (see
 | `/api/auth/*` | `src/app/api/auth/[...nextauth]/route.ts` | Dynamic | Auth.js endpoints. `503` when sign-in is not configured. |
 | `/api/v1/agents/challenge` | `src/app/api/v1/agents/challenge/route.ts` | Dynamic `POST` | Issues a single-use, five-minute registration challenge. Bearer API key; `401` missing or invalid, `403` below `email_verified`. |
 | `/api/v1/agents` | `src/app/api/v1/agents/route.ts` | Dynamic `GET`, `POST` | `GET` lists the account's agents and public keys. `POST` registers an agent with proof of possession. Same bearer-key rules. |
+| `/api/v1/agents/:agentId/keys/:keyId/attestation` | `src/app/api/v1/agents/[agentId]/keys/[keyId]/attestation/route.ts` | Dynamic `POST` | Uploads a client-produced directory response signature for one key. Bearer API key. |
+| `/api/v1/keys/:thumbprint` | `src/app/api/v1/keys/[thumbprint]/route.ts` | Dynamic `GET` | Metadata for a published keyid (agent name, purpose, status). Same Host rules as the directory. |
 | `/_not-found` | Next.js built-in | Static | Default 404. |
 | `/favicon.ico` | `src/app/favicon.ico` | Static asset | |
 
@@ -171,38 +173,52 @@ committed.
 - Vercel serves the directory with `cache-control: public, max-age=300`
   (Vercel strips `s-maxage` from the client-facing header).
 
+## Hosted key directory (Phase 3)
+
+`Signature-Agent` for `type=directory` must be a bare origin
+(`STANDARDS_NOTES.md` §9), so each account gets its own authority:
+
+`<account-id>.<AGENTPROOF_DIRECTORY_DOMAIN>`
+
+- **Default base domain:** `id.localhost` (no env var required). Modern
+  systems resolve `*.localhost` to loopback, so local development and tests
+  work without buying a domain or configuring wildcard DNS.
+- **Configurable:** set `AGENTPROOF_DIRECTORY_DOMAIN` (host only, no scheme)
+  when a real wildcard domain exists. Do not hardcode a product domain in
+  code.
+- **Path:** `GET /.well-known/http-message-signatures-directory` on that Host.
+  Requests to the app origin without an account subdomain return `404`.
+- **Body:** deterministic JWKS `{"keys":[…]}` with only `active` and
+  `retiring` keys whose agents are `active`, excluding revoked, expired
+  (`not_after`), and `pending_review`. Each JWK is
+  `{ kty, crv, kid, x, use }` with `kid` = RFC 7638 thumbprint and **no
+  `alg`**. Keys are sorted by thumbprint.
+- **Headers:** `Content-Type: application/http-message-signatures-directory+json`,
+  `Cache-Control: public, max-age=300, s-maxage=300`,
+  `Access-Control-Allow-Origin: *`, and `Content-Digest` (sha-256) of the
+  exact body bytes.
+- **Metadata:** `GET /api/v1/keys/:thumbprint` on the same Host returns
+  `{ thumbprint, name, purpose, status }` for published keys only.
+- **Attestations (key custody):** the draft's directory response signature
+  covers `@authority;req` and `content-digest` of the body
+  (`STANDARDS_NOTES.md` §8). The server never signs. The developer's CLI/SDK
+  signs locally and `POST /api/v1/agents/:agentId/keys/:keyId/attestation`
+  uploads `{ authority, signature_input, signature, label? }`. The server
+  verifies against the stored public key and the current directory body,
+  stores one attestation per key (table `directory_attestation`), and when
+  serving attaches only attestations that match the request Host authority,
+  the current `Content-Digest`, and a non-expired `expires`. Expired or
+  stale attestations are dropped from response headers; the key stays listed.
+- **Production wildcard DNS / Vercel custom domain** is required for a real
+  public directory host. Until then, Host-header tests and `*.id.localhost`
+  are the working fallback. See the Phase 3 report for setup steps.
+
 ## Placeholder and demo code
 
 Everything below is either marketing copy for features that don't exist yet
 or demo code that must not be mistaken for a working implementation.
 
-### 1. Hardcoded directory stub (replace in Phase 3)
-
-`src/app/.well-known/http-message-signatures-directory/route.ts` returns a
-constant JWKS with one Ed25519 public key:
-
-```json
-{"keys":[{"kty":"OKP","crv":"Ed25519","x":"xXsYx3DYkQTI5gXXLHw3SA-v6gdJINtdyPaPxZO_XrQ","kid":"ZMAe8LHEPuxRsPoFaLFQ6WvJKf0NDbUX3sbGYsodW54","alg":"EdDSA","use":"sig"}]}
-```
-
-- It serves the right media type, `Access-Control-Allow-Origin: *`, and
-  `Cache-Control: public, max-age=300, s-maxage=300`.
-- `kid` is the correct RFC 7638 thumbprint of `x`. `tests/app/directory-stub.test.ts`
-  checks this.
-- It is not connected to any account or agent. It is one global directory at
-  the app origin. Nothing records who holds the private key, and no request
-  signed with it is known to exist.
-- It sends no directory response signature (`Signature-Input`, `Signature`,
-  `Content-Digest`). The current draft makes those optional; see
-  `STANDARDS_NOTES.md` §8.
-- It includes `"alg": "EdDSA"`. The current draft says a directory's `alg`
-  is "restricted to algorithms registered in the HTTP Signature Algorithms"
-  registry, where the Ed25519 name is `ed25519`, not the JOSE name `EdDSA`.
-  Cloudflare's reference implementation, on the other hand, rejects any value
-  other than `EdDSA`. Phase 3 should omit `alg` from served keys (see
-  `STANDARDS_NOTES.md` §11).
-
-### 2. In-browser identity lab (replace in Phase 5)
+### 1. In-browser identity lab (replace in Phase 5)
 
 `src/components/identity-demo.tsx` (client component) is shown at `/#lab`.
 
@@ -238,7 +254,7 @@ What is demo-only or wrong. None of this interoperates with a real verifier:
 - The "Hosted directory preview" adds `alg: "EdDSA"`, which has the same
   problem as the stub.
 
-### 3. Marketing copy for features that don't exist yet
+### 2. Marketing copy for features that don't exist yet
 
 In `src/app/page.tsx`:
 
@@ -250,12 +266,10 @@ In `src/app/page.tsx`:
   by AgentProof is out of scope (see the build plan).
 - The "Request check" panel in the "Why now" section is a static
   illustration, not a live check.
-- The "Private preview" badge and the "Publish" step describe a hosted
-  directory that doesn't exist yet.
 - The README "Next production milestones" list predates the build plan. The
   build plan takes precedence.
 
-Phase 0 changed none of this. Later phases update the copy as features ship.
+Later phases update the copy as features ship.
 
 ## Agent registration
 
@@ -271,12 +285,13 @@ Registration signs the UTF-8 bytes of one compact JSON object. Property order is
 part of version 1 and is lexical:
 
 ```json
-{"account_id":"<account id>","directory_authority":"<account id>.id.agentproof.dev","issued_at":<unix seconds>,"nonce":"<challenge nonce>","purpose":"<declared purpose>","thumbprint":"<RFC 7638 thumbprint>","type":"agentproof-registration-v1"}
+{"account_id":"<account id>","directory_authority":"<account id>.id.localhost","issued_at":<unix seconds>,"nonce":"<challenge nonce>","purpose":"<declared purpose>","thumbprint":"<RFC 7638 thumbprint>","type":"agentproof-registration-v1"}
 ```
 
 The server computes the thumbprint from the submitted public JWK and derives
-the directory authority from the authenticated account. It accepts and stores
-only `{ "kty": "OKP", "crv": "Ed25519", "x": "..." }`. Requests containing a
+the directory authority from the authenticated account (default base
+`id.localhost`). It accepts and stores only
+`{ "kty": "OKP", "crv": "Ed25519", "x": "..." }`. Requests containing a
 private JWK member or PEM private key are rejected before signature handling
 and their bodies are never logged.
 
@@ -294,13 +309,13 @@ variables documented in `.env.example`.
 | File | What it covers |
 | --- | --- |
 | `tests/standards/vectors.test.ts` | RFC 7638/8037 thumbprints, RFC 9421 B.2.6, and draft-ietf-webbotauth-httpsig-protocol-00 E.2.1–E.2.3 test vectors, verified with Node's built-in crypto. |
-| `tests/key-custody/private-key-material.test.ts` | The private-key-material detector, run against every API response that returns keys (the directory stub and the three `/api/v1/agents` routes), and a check that no column in any table in `src/db/schema.ts` could hold private keys. |
+| `tests/key-custody/private-key-material.test.ts` | The private-key-material detector, run against every API response that returns keys (directory, metadata, agents, attestation error bodies), and a check that no column in any table in `src/db/schema.ts` could hold private keys. |
 | `tests/accounts/auth-flow.test.ts` | Runs the real Auth.js handler against in-memory PGlite: sign up, verify, log out, log in again, reused link, expired link, hashed token storage, and a minimal session response. |
 | `tests/accounts/access.test.ts` | The agents page and the agent APIs reject signed-out (no API key) and `unverified` users and admit verified ones. |
 | `tests/accounts/domain.test.ts` | Domain verification with mocked DNS: correct TXT passes, a missing or wrong TXT fails. |
 | `tests/agents/registration.test.ts` | Hashed and revocable API keys, local key generation, proof-of-possession registration, public-only persistence, challenge expiry/replay, global thumbprint uniqueness, pending-review limits, and that keys of non-active agents are never reported as active. |
 | `tests/agents/routes.test.ts` | Calls the real agent route handlers: `401` for a missing or invalid key, `403` for unverified accounts, successful registration and listing, `409` for a reused challenge, and `400` for a `d` field, a PEM private key, or a non-Ed25519 key. |
-| `tests/app/directory-stub.test.ts` | Pins the stub's current headers and body, so Phase 0 can show nothing changed. Delete it along with the stub in Phase 3. |
+| `tests/directory/directory.test.ts` | Per-account directory hosting on `*.id.localhost`, exclusion of revoked/pending keys, metadata lookup, attestation upload + independent header verification, and expiry dropping. |
 
 ## Directory layout
 

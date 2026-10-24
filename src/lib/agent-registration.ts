@@ -69,14 +69,17 @@ export function effectiveKeyStatus(
     : keyStatus;
 }
 
-export function directoryAuthority(accountId: string) {
-  const base = (
-    process.env.AGENTPROOF_DIRECTORY_DOMAIN || "id.agentproof.dev"
-  )
+// Directory hosts are <accountId>.<base>. Default base is id.localhost so
+// local development and tests work without a real domain or wildcard DNS.
+export function directoryBaseDomain() {
+  return (process.env.AGENTPROOF_DIRECTORY_DOMAIN || "id.localhost")
     .replace(/^https?:\/\//, "")
     .replace(/\/.*$/, "")
     .toLowerCase();
-  return `${accountId}.${base}`;
+}
+
+export function directoryAuthority(accountId: string) {
+  return `${accountId}.${directoryBaseDomain()}`;
 }
 
 export function publicJwkThumbprint(jwk: PublicEd25519Jwk) {

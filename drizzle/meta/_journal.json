@@ -15,6 +15,13 @@
       "when": 1790806319232,
       "tag": "0001_puzzling_grandmaster",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1792878394698,
+      "tag": "0002_directory_attestations",
+      "breakpoints": true
     }
   ]
 }
